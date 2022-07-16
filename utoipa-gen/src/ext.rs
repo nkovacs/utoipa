@@ -236,7 +236,7 @@ pub mod fn_arg {
     ) -> impl Iterator<Item = FnArg2<'_>> {
         let tt = fn_args
             .iter()
-            .map(|arg| {
+            .flat_map(|arg| {
                 let pat_type = get_fn_arg_pat_type(arg);
 
                 let arg_name = match pat_type.pat.as_ref() {
@@ -246,7 +246,7 @@ pub mod fn_arg {
                     ),
                 };
 
-                (ComponentPart::from_type(pat_type.ty.as_ref()), arg_name)
+                ComponentPart::from_type(pat_type.ty.as_ref()).map(move |component_part| (component_part, arg_name))
             })
             .map(FnArg2::from);
 

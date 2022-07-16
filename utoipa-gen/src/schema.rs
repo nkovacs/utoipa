@@ -1,12 +1,12 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, iter};
 
 use proc_macro2::Ident;
 use proc_macro_error::{abort, abort_call_site};
 use quote::ToTokens;
 use syn::{
     parse::{Parse, ParseStream},
-    AngleBracketedGenericArguments, Attribute, GenericArgument, PathArguments, PathSegment, Type,
-    TypePath,
+    AngleBracketedGenericArguments, Attribute, GenericArgument, Item, PathArguments, PathSegment,
+    Type, TypePath,
 };
 
 use crate::{component_type::ComponentType, Deprecated};
@@ -34,22 +34,32 @@ pub struct ComponentPart<'a> {
     pub path: Cow<'a, TypePath>,
     pub value_type: ValueType,
     pub generic_type: Option<GenericType>,
-    pub child: Option<Box<ComponentPart<'a>>>,
+    pub child: Option<Vec<ComponentPart<'a>>>,
 }
 
 impl<'a> ComponentPart<'a> {
-    pub fn from_type(ty: &'a Type) -> ComponentPart<'a> {
-        ComponentPart::from_type_path(Self::get_type_path(ty))
+    pub fn from_type(ty: &'a Type) -> &'a mut dyn Iterator<Item = ComponentPart> {
+        let a = ComponentPart::from_type_path(Self::get_type_paths(ty).as_mut());
+        &mut a
     }
 
-    fn get_type_path(ty: &'a Type) -> &'a TypePath {
+    fn get_type_paths(ty: &'a Type) -> Box<dyn Iterator<Item = &'a TypePath> + 'a> {
+        dbg!("get type path", &ty);
         match ty {
-            Type::Path(path) => path,
+            Type::Path(path) => Box::new(iter::once(path)),
             Type::Reference(reference) => match reference.elem.as_ref() {
-                Type::Path(path) => path,
+                Type::Path(path) => {
+                    Box::new(iter::once(path))
+                },
                 _ => abort_call_site!("unexpected type in reference, expected Type:Path"),
             },
-            Type::Group(group) => Self::get_type_path(group.elem.as_ref()),
+            Type::Group(group) => Self::get_type_paths(group.elem.as_ref()),
+            Type::Tuple(tuple) => {
+                let a = tuple.elems.iter().flat_map(Self::get_type_paths);
+               
+                Box::new(a)
+            },
+            // TODO resolve tuple???
             _ => abort_call_site!(
                 "unexpected type in component part get type path, expected one of: Path, Reference, Group"
             ),
@@ -57,14 +67,17 @@ impl<'a> ComponentPart<'a> {
     }
 
     /// Creates a [`ComponentPath`] from a [`TypePath`].
-    fn from_type_path(path: &'a TypePath) -> ComponentPart<'a> {
+    fn from_type_path(path: &'a mut (dyn Iterator<Item = &'a TypePath>)) -> impl Iterator<Item = ComponentPart<'a>> + 'a {
         // there will always be one segment at least
-        let last_segment = path.path.segments.last().unwrap();
-        if last_segment.arguments.is_empty() {
-            Self::convert(Cow::Borrowed(path))
-        } else {
-            Self::resolve_component_type(last_segment)
-        }
+
+        path.into_iter().map(|path| {
+            let last_segment = path.path.segments.last().unwrap();
+            if last_segment.arguments.is_empty() {
+                Self::convert(Cow::Borrowed(path))
+            } else {
+                Self::resolve_component_type(last_segment)
+            }
+        })
     }
 
     // Only when type is a generic type we get to this function.
@@ -94,12 +107,17 @@ impl<'a> ComponentPart<'a> {
                     None
                 } else {
                     match generic_component_type.generic_type {
-                        Some(GenericType::Map) => Some(ComponentPart::get_generic_arg_type(
+                        Some(GenericType::Map) => {
+                        // TODO this could also return iterator of generic types e.g. for Map `HashMap<T, V>
+                        // return T, V.
+                        // Self::get_generic_arg_type(index, args, skip_first)
+                        Some(Self::get_generic_arg_type(
                             0,
                             angle_bracketed_args,
                             true,
-                        )),
-                        _ => Some(ComponentPart::get_generic_arg_type(
+                        ))
+                        },
+                        _ => Some(Self::get_generic_arg_type(
                             0,
                             angle_bracketed_args,
                             false,
@@ -113,7 +131,7 @@ impl<'a> ComponentPart<'a> {
             ),
         };
 
-        generic_component_type.child = generic_type.map(ComponentPart::from_type).map(Box::new);
+        generic_component_type.child = generic_type.map(ComponentPart::from_type).map(|arg| arg.collect());
 
         generic_component_type
     }
@@ -182,7 +200,8 @@ impl<'a> ComponentPart<'a> {
             | Some(GenericType::Cow)
             | Some(GenericType::Box)
             | Some(GenericType::RefCell) => {
-                Self::find_mut_by_ident(self.child.as_mut().unwrap().as_mut(), ident)
+                self.child.as_mut().unwrap().into_iter().find_map(|child| Self::find_mut_by_ident(child, ident))
+                // Self::find_mut_by_ident(self.child.as_mut().unwrap().as_mut(), ident)
             }
             None => {
                 if ident.to_token_stream().to_string() == self.path.to_token_stream().to_string() {
@@ -218,7 +237,7 @@ impl<'a> ComponentPart<'a> {
             .ident
             == s;
         if let Some(ref child) = self.child {
-            is = is || child.is(s)
+            is = is || child.iter().any(|child| child.is(s))
         }
 
         is
@@ -257,7 +276,7 @@ struct TypeToken(Type);
 impl TypeToken {
     /// Get the [`ComponentPart`] of the [`syn::Type`].
     fn get_component_part(&self) -> ComponentPart<'_> {
-        ComponentPart::from_type(&self.0)
+        ComponentPart::from_type(&self.0).next().unwrap()
     }
 }
 
