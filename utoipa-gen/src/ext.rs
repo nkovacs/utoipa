@@ -137,7 +137,7 @@ pub mod fn_arg {
 
     use crate::{
         component_type::ComponentType,
-        schema::{ComponentPart, GenericType, ValueType},
+        schema::{ComponentPartValue, GenericType, ValueType},
     };
 
     use super::{ArgumentIn, IntoParamsType, MacroArg, ValueArgument};
@@ -160,12 +160,12 @@ pub mod fn_arg {
 
     #[cfg_attr(feature = "debug", derive(Debug))]
     pub struct FnArg2<'a> {
-        pub(super) ty: ComponentPart<'a>,
+        pub(super) ty: ComponentPartValue<'a>,
         pub(super) name: &'a Ident,
     }
 
-    impl<'a> From<(ComponentPart<'a>, &'a Ident)> for FnArg2<'a> {
-        fn from(tuple: (ComponentPart<'a>, &'a Ident)) -> Self {
+    impl<'a> From<(ComponentPartValue<'a>, &'a Ident)> for FnArg2<'a> {
+        fn from(tuple: (ComponentPartValue<'a>, &'a Ident)) -> Self {
             Self {
                 ty: tuple.0,
                 name: tuple.1,
@@ -246,7 +246,7 @@ pub mod fn_arg {
                     ),
                 };
 
-                ComponentPart::from_type(pat_type.ty.as_ref()).map(move |component_part| (component_part, arg_name))
+                ComponentPartValue::from_type(pat_type.ty.as_ref()).map(move |component_part| (component_part, arg_name))
             })
             .map(FnArg2::from);
 

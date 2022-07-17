@@ -1,12 +1,11 @@
-use std::{borrow::Cow, iter};
+use std::{borrow::Cow, fmt::Debug, iter};
 
 use proc_macro2::Ident;
 use proc_macro_error::{abort, abort_call_site};
 use quote::ToTokens;
 use syn::{
     parse::{Parse, ParseStream},
-    AngleBracketedGenericArguments, Attribute, GenericArgument, Item, PathArguments, PathSegment,
-    Type, TypePath,
+    Attribute, GenericArgument, PathArguments, PathSegment, Type, TypePath,
 };
 
 use crate::{component_type::ComponentType, Deprecated};
@@ -27,76 +26,76 @@ fn get_deprecated(attributes: &[Attribute]) -> Option<Deprecated> {
     })
 }
 
+pub enum ComponentPart<'a> {
+    Singular(ComponentPartValue<'a>),
+    Tuple(&'a mut dyn Iterator<Item = ComponentPartValue<'a>>),
+}
+
 #[derive(PartialEq)]
 #[cfg_attr(feature = "debug", derive(Debug))]
 /// Linked list of implementing types of a field in a struct.
-pub struct ComponentPart<'a> {
+pub struct ComponentPartValue<'a> {
     pub path: Cow<'a, TypePath>,
     pub value_type: ValueType,
     pub generic_type: Option<GenericType>,
-    pub child: Option<Vec<ComponentPart<'a>>>,
+    pub children: Option<Vec<ComponentPartValue<'a>>>,
 }
 
-impl<'a> ComponentPart<'a> {
-    pub fn from_type(ty: &'a Type) -> &'a mut dyn Iterator<Item = ComponentPart> {
-        let a = ComponentPart::from_type_path(Self::get_type_paths(ty).as_mut());
-        &mut a
+impl<'a> ComponentPartValue<'a> {
+    pub fn from_type(ty: &'a Type) -> &'a mut dyn Iterator<Item = ComponentPartValue> {
+        &mut ComponentPartValue::from_type_path(Self::get_type_paths(ty).as_mut())
     }
 
     fn get_type_paths(ty: &'a Type) -> Box<dyn Iterator<Item = &'a TypePath> + 'a> {
         dbg!("get type path", &ty);
         match ty {
             Type::Path(path) => Box::new(iter::once(path)),
-            Type::Reference(reference) => match reference.elem.as_ref() {
-                Type::Path(path) => {
-                    Box::new(iter::once(path))
-                },
-                _ => abort_call_site!("unexpected type in reference, expected Type:Path"),
-            },
+            Type::Reference(reference) => Self::get_type_paths(reference.elem.as_ref()),
             Type::Group(group) => Self::get_type_paths(group.elem.as_ref()),
             Type::Tuple(tuple) => {
-                let a = tuple.elems.iter().flat_map(Self::get_type_paths);
-               
-                Box::new(a)
+                Box::new(tuple.elems.iter().flat_map(Self::get_type_paths))
             },
-            // TODO resolve tuple???
             _ => abort_call_site!(
-                "unexpected type in component part get type path, expected one of: Path, Reference, Group"
+                "unexpected type in component part get type path, expected one of: Path, Reference, Group, Tuple"
             ),
         }
     }
 
-    /// Creates a [`ComponentPath`] from a [`TypePath`].
-    fn from_type_path(path: &'a mut (dyn Iterator<Item = &'a TypePath>)) -> impl Iterator<Item = ComponentPart<'a>> + 'a {
+    /// Creates a [`ComponentPart`] from a [`syn::TypePath`].
+    fn from_type_path(
+        path: &'a mut (dyn Iterator<Item = &'a TypePath>),
+    ) -> impl Iterator<Item = ComponentPartValue<'a>> + 'a {
         // there will always be one segment at least
+        // (i64, HashMap<String, bool>)
+        // (i64, HashMap<(i64, HashMap<String, bool>), bool>)
+        // how to represent type above in ComponentPart??
+        // how to distinct the boundary between tuples and singular types???
+
+        let s = path.into_iter().count();
 
         path.into_iter().map(|path| {
-            let last_segment = path.path.segments.last().unwrap();
+            let last_segment = path
+                .path
+                .segments
+                .last()
+                .expect("at least one segment within path in ComponentPart::from_type_path");
+
             if last_segment.arguments.is_empty() {
-                Self::convert(Cow::Borrowed(path))
+                Self::convert(Cow::Borrowed(path), last_segment)
             } else {
-                Self::resolve_component_type(last_segment)
+                Self::resolve_component_type(Cow::Borrowed(path), last_segment)
             }
         })
     }
 
     // Only when type is a generic type we get to this function.
-    fn resolve_component_type(segment: &'a PathSegment) -> ComponentPart<'a> {
-        if segment.arguments.is_empty() {
-            abort!(
-                segment.ident,
-                "expected at least one angle bracket argument but was 0"
-            );
-        };
+    fn resolve_component_type(
+        path: Cow<'a, TypePath>,
+        last_segment: &'a PathSegment,
+    ) -> ComponentPartValue<'a> {
+        let mut generic_component_type = ComponentPartValue::convert(path, last_segment);
 
-        let path = TypePath {
-            qself: None,
-            path: syn::Path::from(segment.clone()), // seems like cannot avoid clone
-        };
-
-        let mut generic_component_type = ComponentPart::convert(Cow::Owned(path));
-
-        let generic_type = match &segment.arguments {
+        let generic_types = match &last_segment.arguments {
             PathArguments::AngleBracketed(angle_bracketed_args) => {
                 // if all type arguments are lifetimes we ignore the generic type
                 if angle_bracketed_args
@@ -106,66 +105,32 @@ impl<'a> ComponentPart<'a> {
                 {
                     None
                 } else {
-                    match generic_component_type.generic_type {
-                        Some(GenericType::Map) => {
-                        // TODO this could also return iterator of generic types e.g. for Map `HashMap<T, V>
-                        // return T, V.
-                        // Self::get_generic_arg_type(index, args, skip_first)
-                        Some(Self::get_generic_arg_type(
-                            0,
-                            angle_bracketed_args,
-                            true,
-                        ))
-                        },
-                        _ => Some(Self::get_generic_arg_type(
-                            0,
-                            angle_bracketed_args,
-                            false,
-                        )),
-                    }
+                    Some(angle_bracketed_args.args.iter()
+                        .filter(|arg| matches!(arg, GenericArgument::Lifetime(_)))
+                        .map(|arg| {
+                            match arg {
+                                GenericArgument::Type(ty) => ty,
+                                _ => abort!(arg, "unexpected GenericArgument, expected GenericArgument::Type in ComponentPart")
+                            }
+
+                        }))
                 }
             }
             _ => abort!(
-                segment.ident,
+                last_segment.ident,
                 "unexpected path argument, expected angle bracketed path argument"
             ),
         };
 
-        generic_component_type.child = generic_type.map(ComponentPart::from_type).map(|arg| arg.collect());
+        generic_component_type.children = generic_types
+            .map(|generic_types| generic_types.flat_map(ComponentPartValue::from_type))
+            .map(|arg| arg.collect());
 
         generic_component_type
     }
 
-    fn get_generic_arg_type(
-        index: usize,
-        args: &'a AngleBracketedGenericArguments,
-        skip_first: bool,
-    ) -> &'a Type {
-        let generic_arg = args.args.iter().nth(index);
-
-        match generic_arg {
-            Some(GenericArgument::Type(generic_type)) if !skip_first => generic_type,
-            Some(GenericArgument::Type(_)) if skip_first => {
-                ComponentPart::get_generic_arg_type(index + 1, args, false)
-            }
-            Some(GenericArgument::Lifetime(_)) => {
-                ComponentPart::get_generic_arg_type(index + 1, args, skip_first)
-            }
-            _ => abort!(
-                generic_arg,
-                "expected generic argument type or generic argument lifetime"
-            ),
-        }
-    }
-
-    fn convert(path: Cow<'a, TypePath>) -> ComponentPart<'a> {
-        let last_segment = path
-            .path
-            .segments
-            .last()
-            .expect("at least one segment within path in ComponentPart::convert");
-
-        let generic_type = ComponentPart::get_generic(last_segment);
+    fn convert(path: Cow<'a, TypePath>, last_segment: &'a PathSegment) -> ComponentPartValue<'a> {
+        let generic_type = ComponentPartValue::get_generic(last_segment);
         let is_primitive = ComponentType(&*path).is_primitive();
 
         Self {
@@ -176,7 +141,7 @@ impl<'a> ComponentPart<'a> {
                 ValueType::Object
             },
             generic_type,
-            child: None,
+            children: None,
         }
     }
 
@@ -200,7 +165,11 @@ impl<'a> ComponentPart<'a> {
             | Some(GenericType::Cow)
             | Some(GenericType::Box)
             | Some(GenericType::RefCell) => {
-                self.child.as_mut().unwrap().into_iter().find_map(|child| Self::find_mut_by_ident(child, ident))
+                self.children
+                    .as_mut()
+                    .unwrap()
+                    .into_iter()
+                    .find_map(|child| Self::find_mut_by_ident(child, ident))
                 // Self::find_mut_by_ident(self.child.as_mut().unwrap().as_mut(), ident)
             }
             None => {
@@ -236,7 +205,7 @@ impl<'a> ComponentPart<'a> {
             .expect("at least one segment in ComponentPart path")
             .ident
             == s;
-        if let Some(ref child) = self.child {
+        if let Some(ref child) = self.children {
             is = is || child.iter().any(|child| child.is(s))
         }
 
@@ -244,8 +213,8 @@ impl<'a> ComponentPart<'a> {
     }
 }
 
-impl<'a> AsMut<ComponentPart<'a>> for ComponentPart<'a> {
-    fn as_mut(&mut self) -> &mut ComponentPart<'a> {
+impl<'a> AsMut<ComponentPartValue<'a>> for ComponentPartValue<'a> {
+    fn as_mut(&mut self) -> &mut ComponentPartValue<'a> {
         self
     }
 }
@@ -275,8 +244,8 @@ struct TypeToken(Type);
 
 impl TypeToken {
     /// Get the [`ComponentPart`] of the [`syn::Type`].
-    fn get_component_part(&self) -> ComponentPart<'_> {
-        ComponentPart::from_type(&self.0).next().unwrap()
+    fn get_component_part(&self) -> &mut dyn Iterator<Item = ComponentPartValue<'_>> {
+        ComponentPartValue::from_type(&self.0)
     }
 }
 

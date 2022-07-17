@@ -15,7 +15,7 @@ use crate::{
     Array, Required,
 };
 
-use super::{ComponentPart, GenericType, ValueType};
+use super::{ComponentPartValue, GenericType, ValueType};
 
 /// Container attribute `#[into_params(...)]`.
 #[derive(Default)]
@@ -263,7 +263,7 @@ impl ToTokens for Param<'_> {
             name = &name[2..];
         }
 
-        let component_part = ComponentPart::from_type(&field.ty);
+        let component_part = ComponentPartValue::from_type(&field.ty);
         let field_param_attrs = field
             .attrs
             .iter()
@@ -337,6 +337,7 @@ impl ToTokens for Param<'_> {
                     .map(|value_type| value_type.get_component_part())
             })
             .unwrap_or(component_part);
+
         let required: Required =
             (!matches!(&component.generic_type, Some(GenericType::Option))).into();
 
@@ -394,7 +395,7 @@ impl Parse for IntoParamsFieldParamsAttr {
 }
 
 struct ParamType<'a> {
-    component: &'a ComponentPart<'a>,
+    component: &'a ComponentPartValue<'a>,
     field_param_attrs: &'a Option<IntoParamsFieldParamsAttr>,
 }
 
@@ -405,7 +406,7 @@ impl ToTokens for ParamType<'_> {
         match &component.generic_type {
             Some(GenericType::Vec) => {
                 let param_type = ParamType {
-                    component: component.child.as_ref().unwrap().as_ref(),
+                    component: component.children.as_ref().unwrap().as_ref(),
                     field_param_attrs: self.field_param_attrs,
                 };
 
@@ -420,7 +421,7 @@ impl ToTokens for ParamType<'_> {
             | Some(GenericType::Box)
             | Some(GenericType::RefCell) => {
                 let param_type = ParamType {
-                    component: component.child.as_ref().unwrap().as_ref(),
+                    component: component.children.as_ref().unwrap().as_ref(),
                     field_param_attrs: self.field_param_attrs,
                 };
 
@@ -431,7 +432,7 @@ impl ToTokens for ParamType<'_> {
                 // additionalProperties denoting the type
 
                 let component_property = ParamType {
-                    component: component.child.as_ref().unwrap().as_ref(),
+                    component: component.children.as_ref().unwrap().as_ref(),
                     field_param_attrs: self.field_param_attrs,
                 };
 

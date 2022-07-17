@@ -8,7 +8,7 @@ use syn::{parenthesized, parse::Parse, Attribute, Error, Token, TypePath};
 use crate::{
     component_type::ComponentFormat,
     parse_utils,
-    schema::{ComponentPart, GenericType},
+    schema::{ComponentPartValue, GenericType},
     AnyValue,
 };
 
@@ -254,7 +254,7 @@ impl<'c> Parse for ComponentAttr<UnnamedFieldStruct<'c>> {
 impl<'c> ComponentAttr<NamedField<'c>> {
     pub(super) fn from_attributes_validated(
         attributes: &[Attribute],
-        component_part: &ComponentPart,
+        component_part: &ComponentPartValue,
     ) -> Option<Self> {
         parse_component_attr::<ComponentAttr<NamedField>>(attributes)
             .map(|attrs| {
@@ -286,7 +286,7 @@ impl<'c> ComponentAttr<NamedField<'c>> {
 }
 
 #[inline]
-fn is_valid_xml_attr(attrs: &ComponentAttr<NamedField>, component_part: &ComponentPart) {
+fn is_valid_xml_attr(attrs: &ComponentAttr<NamedField>, component_part: &ComponentPartValue) {
     if !matches!(
         component_part.generic_type,
         Some(crate::schema::GenericType::Vec)

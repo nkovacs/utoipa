@@ -20,7 +20,7 @@ use self::{
 
 use super::{
     serde::{self, RenameRule, SerdeContainer, SerdeValue},
-    ComponentPart, GenericType, ValueType,
+    ComponentPartValue, GenericType, ValueType,
 };
 
 mod attr;
@@ -218,7 +218,7 @@ impl ToTokens for NamedStructComponent<'_> {
                 let name = &rename_field(&container_rules, &mut field_rule, field_name)
                     .unwrap_or_else(|| String::from(field_name));
 
-                let component_part = &mut ComponentPart::from_type(&field.ty);
+                let component_part = &mut ComponentPartValue::from_type(&field.ty);
 
                 if let Some((generic_types, alias)) = self.generics.zip(self.alias) {
                     generic_types
@@ -246,7 +246,7 @@ impl ToTokens for NamedStructComponent<'_> {
                         .as_ref()
                         .value_type
                         .as_ref()
-                        .map(ComponentPart::from_type_path)
+                        .map(ComponentPartValue::from_type_path)
                 });
 
                 let xml_value = attrs
@@ -300,13 +300,13 @@ impl ToTokens for UnnamedStructComponent<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let fields_len = self.fields.len();
         let first_field = self.fields.first().unwrap();
-        let first_part = &ComponentPart::from_type(&first_field.ty);
+        let first_part = &ComponentPartValue::from_type(&first_field.ty);
 
         let mut is_object = matches!(first_part.value_type, ValueType::Object);
 
         let all_fields_are_same = fields_len == 1
             || self.fields.iter().skip(1).all(|field| {
-                let component_part = &ComponentPart::from_type(&field.ty);
+                let component_part = &ComponentPartValue::from_type(&field.ty);
 
                 first_part == component_part
             });
@@ -320,7 +320,7 @@ impl ToTokens for UnnamedStructComponent<'_> {
                     .as_ref()
                     .value_type
                     .as_ref()
-                    .map(ComponentPart::from_type_path)
+                    .map(ComponentPartValue::from_type_path)
             });
 
             if override_component.is_some() {
@@ -660,7 +660,7 @@ struct TypeTuple<'a, T>(T, &'a Ident);
 
 #[cfg_attr(feature = "debug", derive(Debug))]
 struct ComponentProperty<'a, T> {
-    component_part: &'a ComponentPart<'a>,
+    component_part: &'a ComponentPartValue<'a>,
     comments: Option<&'a CommentAttributes>,
     attrs: Option<&'a ComponentAttr<T>>,
     deprecated: Option<&'a Deprecated>,
@@ -669,7 +669,7 @@ struct ComponentProperty<'a, T> {
 
 impl<'a, T: Sized + ToTokens> ComponentProperty<'a, T> {
     fn new(
-        component_part: &'a ComponentPart<'a>,
+        component_part: &'a ComponentPartValue<'a>,
         comments: Option<&'a CommentAttributes>,
         attrs: Option<&'a ComponentAttr<T>>,
         deprecated: Option<&'a Deprecated>,
@@ -700,7 +700,7 @@ where
                 // Maps are treated as generic objects with no named properties and
                 // additionalProperties denoting the type
                 let component_property = ComponentProperty::new(
-                    self.component_part.child.as_ref().unwrap().as_ref(),
+                    self.component_part.children.as_ref().unwrap().as_ref(),
                     self.comments,
                     self.attrs,
                     self.deprecated,
@@ -720,7 +720,7 @@ where
             }
             Some(GenericType::Vec) => {
                 let component_property = ComponentProperty::new(
-                    self.component_part.child.as_ref().unwrap().as_ref(),
+                    self.component_part.children.as_ref().unwrap().as_ref(),
                     self.comments,
                     self.attrs,
                     self.deprecated,
@@ -746,7 +746,7 @@ where
             | Some(GenericType::Box)
             | Some(GenericType::RefCell) => {
                 let component_property = ComponentProperty::new(
-                    self.component_part.child.as_ref().unwrap().as_ref(),
+                    self.component_part.children.as_ref().unwrap().as_ref(),
                     self.comments,
                     self.attrs,
                     self.deprecated,
