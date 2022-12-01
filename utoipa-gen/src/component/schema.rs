@@ -224,8 +224,6 @@ impl NamedStructSchema<'_> {
         field: &Field,
         yield_: impl FnOnce(SchemaProperty<'_>, Option<Cow<'_, str>>) -> R,
     ) -> R {
-        let type_tree = &mut TypeTree::from_type(&field.ty);
-
         let mut field_features = field
             .attrs
             .parse_features::<NamedFieldFeatures>()
@@ -237,18 +235,6 @@ impl NamedStructSchema<'_> {
                 _ => None,
             });
 
-        if let Some((generic_types, alias)) = self.generics.zip(self.alias) {
-            generic_types
-                .type_params()
-                .enumerate()
-                .for_each(|(index, generic)| {
-                    if let Some(generic_type) = type_tree.find_mut_by_ident(&generic.ident) {
-                        generic_type
-                            .update_path(&alias.generics.type_params().nth(index).unwrap().ident);
-                    };
-                })
-        }
-
         let deprecated = super::get_deprecated(&field.attrs);
         let value_type = field_features
             .as_mut()
@@ -258,9 +244,28 @@ impl NamedStructSchema<'_> {
             .map(|value_type| value_type.as_type_tree());
         let comments = CommentAttributes::from_attributes(&field.attrs);
 
+        let type_tree = override_type_tree.unwrap_or_else(|| {
+            let mut type_tree = TypeTree::from_type(&field.ty);
+
+            if let Some((generic_types, alias)) = self.generics.zip(self.alias) {
+                generic_types
+                    .type_params()
+                    .enumerate()
+                    .for_each(|(index, generic)| {
+                        if let Some(generic_type) = type_tree.find_mut_by_ident(&generic.ident) {
+                            generic_type.update_path(
+                                &alias.generics.type_params().nth(index).unwrap().ident,
+                            );
+                        };
+                    })
+            }
+
+            type_tree
+        });
+
         yield_(
             SchemaProperty::new(
-                override_type_tree.as_ref().unwrap_or(type_tree),
+                &type_tree,
                 Some(&comments),
                 field_features.as_ref(),
                 deprecated.as_ref(),
